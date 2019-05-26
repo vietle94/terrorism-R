@@ -1,0 +1,103 @@
+---
+title: "Global terrorism"
+date: 2019-05-25T10-24-00
+output: 
+  md_document: default
+---
+
+```{r, echo = FALSE}
+knitr::opts_chunk$set(
+  fig.width=12, fig.height=8,
+  cache = T
+)
+
+```
+
+# Intro
+
+# Library
+
+```{r}
+library(tidyverse)
+library(skimr)
+library(maps)
+```
+
+# Load data
+
+```{r, cache = TRUE}
+data <- read_csv("data/globalterrorismdb_0718dist.csv", col_types = cols(
+  ransomamtus = col_number(),
+  ransomnote = col_character(),
+  attacktype3 = col_integer(),
+  attacktype3_txt = col_character(),
+  claimmode2 = col_integer(),
+  claimmode2_txt = col_character(),
+  claimmode3 = col_integer(),
+  claimmode3_txt = col_character(),
+  weaptype4 = col_integer(),
+  weaptype4_txt = col_character(),
+  weapsubtype4 = col_integer(),
+  weapsubtype4_txt = col_character(),
+  gname3 = col_character(),
+  gsubname3 = col_character(),
+  gsubname2 = col_character(),
+  ransompaidus = col_number(),
+  compclaim = col_integer()
+))
+```
+
+Data dimensions
+
+```{r}
+dim(data)
+```
+
+First glance
+
+```{r}
+colnames(data)
+```
+
+
+Deal with latitude and longtitude
+```{r}
+data %>% select(longitude, latitude) %>%  skim()
+data %>% filter(is.na(latitude)) %>% select(location, city, provstate, country_txt, specificity) %>% filter(is.na(specificity))
+
+data %>% map_df(~ str_detect(.,"Unknown" )) %>% summarise_all(sum, na.rm = TRUE)
+```
+
+longitude value appear to be incorrect at -8.6e+07. By compare the location with actual coordinate on google, it is obvious that a decimal separator is missing. The code below will fix that
+
+```{r}
+data %>% filter(longitude == min(data$longitude, na.rm = T))
+
+data[data$eventid == 198212240004, "longitude"] <- -86.185896
+
+```
+
+
+Map
+
+```{r}
+world <- map_data("world")
+worldmap <- ggplot(data = world, aes(long, lat)) + borders("world") +
+  theme(panel.background = element_blank(),
+                   axis.title = element_blank(),
+                   axis.line.x = element_blank(),
+                   axis.ticks = element_blank(),
+                   axis.text = element_blank()) +
+   coord_fixed(1.2)
+
+worldmap + geom_point(data = data , aes(x = longitude, y = latitude), alpha = 0.1, size = 0.5)
+
+```
+
+map
+
+```{r}
+worldmap + geom_count(data = data , aes(x = longitude, y = latitude), size = 0.5)
+```
+
+
