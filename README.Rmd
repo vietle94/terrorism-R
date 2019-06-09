@@ -7,20 +7,52 @@ output:
 
 ```{r, echo = FALSE}
 knitr::opts_chunk$set(
-  fig.width=12, fig.height=8,
-  cache = T
+  fig.width=12, fig.height=8
 )
 
 ```
 
 # Intro
 
+In this project, I created a shiny app which produced interactive visualization for the data set at [Global terrorism](https://vietle.shinyapps.io/terrorism-Rshiny/). All steps of cleaning and preprocessing is shown here.
+
+## About the data set
+
+**Context**
+
+Information on more than 180,000 Terrorist Attacks.  
+
+The Global Terrorism Database (GTD) is an open-source database including information on terrorist attacks around the world from 1970 through 2017. The GTD includes systematic data on domestic as well as international terrorist incidents that have occurred during this time period and now includes more than 180,000 attacks. The database is maintained by researchers at the National Consortium for the Study of Terrorism and Responses to Terrorism (START), headquartered at the University of Maryland.  
+
+[More information](www.start.umd.edu/gtd/)
+
+**Content**  
+
+Geography: Worldwide.  
+
+Time period: 1970-2017, except 1993  
+
+Unit of analysis: Attack  
+
+Variables: >100 variables on location, tactics, perpetrators, targets, and outcomes  
+
+Sources: Unclassified media articles (Note: Please interpret changes over time with caution. Global patterns are driven by diverse trends in particular regions, and data collection is influenced by fluctuations in access to media coverage over both time and place.)
+
+Definition of terrorism:
+
+"The threatened or actual use of illegal force and violence by a non-state actor to attain a political, economic, religious, or social goal through fear, coercion, or intimidation."
+
+See the GTD Codebook for important details on data collection methodology, definitions, and coding schema.
+
+[the GTD Codebook](https://www.start.umd.edu/gtd/downloads/Codebook.pdf)
+
 # Library
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 library(tidyverse)
 library(skimr)
 library(maps)
+library(leaflet)
 ```
 
 # Load data
@@ -45,6 +77,19 @@ data <- read_csv("data/globalterrorismdb_0718dist.csv", col_types = cols(
   ransompaidus = col_number(),
   compclaim = col_integer()
 ))
+
+# For world map
+
+world <- map_data("world")
+worldmap <- ggplot(data = world, aes(long, lat)) + borders("world") +
+  theme(panel.background = element_blank(),
+                   axis.title = element_blank(),
+                   axis.line.x = element_blank(),
+                   axis.ticks = element_blank(),
+                   axis.text = element_blank()) +
+   coord_fixed(1.2)
+
+
 ```
 
 Data dimensions
@@ -63,41 +108,108 @@ colnames(data)
 Deal with latitude and longtitude
 ```{r}
 data %>% select(longitude, latitude) %>%  skim()
-data %>% filter(is.na(latitude)) %>% select(location, city, provstate, country_txt, specificity) %>% filter(is.na(specificity))
-
-data %>% map_df(~ str_detect(.,"Unknown" )) %>% summarise_all(sum, na.rm = TRUE)
 ```
 
-longitude value appear to be incorrect at -8.6e+07. By compare the location with actual coordinate on google, it is obvious that a decimal separator is missing. The code below will fix that
+longitude value appear to be incorrect at -8.6e+07. By compare the location with actual coordinate on google, it is obvious that a decimal separator is missing. The code below will fix that by changing it to -86.185896
 
-```{r}
-data %>% filter(longitude == min(data$longitude, na.rm = T))
-
+```{r eval=FALSE}
 data[data$eventid == 198212240004, "longitude"] <- -86.185896
 
 ```
 
+Deal with missing longitude and latitude by using the country location as the incident location. The country location is obtained by using Mapquest API.
 
-Map
+```{r eval=FALSE, include=FALSE}
+KEY <- "YVjGrSZqSDBhUnGCcocPjsTwEpoBgaM5"
+```
 
-```{r}
-world <- map_data("world")
-worldmap <- ggplot(data = world, aes(long, lat)) + borders("world") +
-  theme(panel.background = element_blank(),
-                   axis.title = element_blank(),
-                   axis.line.x = element_blank(),
-                   axis.ticks = element_blank(),
-                   axis.text = element_blank()) +
-   coord_fixed(1.2)
 
-worldmap + geom_point(data = data , aes(x = longitude, y = latitude), alpha = 0.1, size = 0.5)
+
+```{r eval=FALSE}
+
+baseurl <- "http://www.mapquestapi.com/geocoding/v1/address?"
+
+
+country <- data %>%  
+  filter(is.na(longitude)) %>%
+  distinct(country_txt)
+
+country <- country %>% mutate(location = str_replace_all(country_txt, " ", "+"))
+
+country$location[country$location == "North+Yemen"] <- "Yemen"
+country$location[country$location == "South+Yemen"] <- "Yemen"
+country$location[country$location == "West+Germany+(FRG)"] <- "Germany"
+country$location[country$location == "Yugoslavia"] <- "Croatia"
+country$location[country$location == "Zaire"] <- "Democratic+Republic+of+the+Congo"
+country$location[country$location == "Soviet+Union"] <- "Russia"
+country$location[country$location == "West+Bank+and+Gaza+Strip"] <- "Gaza+Strip"
+country$location[country$location == "Rhodesia"] <- "Zimbabwe"
+country$location[country$location == "Czechoslovakia"] <- "Czech+Republic"
+
+url <- str_c(baseurl, "key=", KEY, "&location=", country$location, "&outFormat=csv")
+
+missing <- url %>%
+  map_dfr( ~ read_csv(.) %>%
+             select(Lat, Lng, GeocodeQuality, GeocodeQualityCode, Country) %>%
+             filter(GeocodeQuality == "COUNTRY"))
+
+country <- bind_cols(country,missing)
+
+temp <- data %>%
+  filter(is.na(longitude)) %>%
+  select(eventid, country_txt) %>%
+  left_join(country) %>%  
+  select(eventid, Lng, Lat)
+
+data <- data %>% left_join(temp, by = "eventid") %>%
+  mutate(longitude = ifelse(is.na(longitude), Lng, longitude)) %>%
+  mutate(latitude = ifelse(is.na(latitude), Lat, latitude))
+```
+
+Missing date and month in the data were recorded as NA, change them to 1. Then create a new column called idate which combined year, month and date together
+
+```{r eval=FALSE}
+
+data$iday[data$iday == 0] <- 1
+data$imonth[data$imonth == 0] <- 1
+
+data$idate <- data %>% unite(date, iyear, imonth, iday, sep = "-") %>%
+  mutate(date = lubridate::ymd(date)) %>%
+  pull(date)
 
 ```
 
-map
+Group name contain non UTF-8 characters due to foreign language. The following code will remove it.
 
-```{r}
-worldmap + geom_count(data = data , aes(x = longitude, y = latitude), size = 0.5)
+```{r eval=FALSE}
+data <- data %>%
+  mutate_at(vars(gname, gname2, gname3), function(x){gsub('[^ -~]', '', x)})
 ```
 
+Create a label for leaflet map by making new column called popmap
+
+```{r eval=FALSE}
+data$popmap <- data %>%
+  mutate(attacktype2_txt = ifelse(is.na(attacktype2_txt)," ", str_c(", ", attacktype2_txt)),
+         attacktype3_txt = ifelse(is.na(attacktype3_txt)," ", str_c(", ", attacktype3_txt)),
+         weaptype2_txt = ifelse(is.na(weaptype2_txt)," ", str_c(", ", weaptype2_txt)),
+         weaptype3_txt = ifelse(is.na(weaptype3_txt)," ", str_c(", ", weaptype3_txt)),
+         targtype2_txt = ifelse(is.na(targtype2_txt)," ", str_c(", ", targtype2_txt)),
+         targtype3_txt = ifelse(is.na(targtype3_txt)," ", str_c(", ", targtype3_txt)),
+         gname2 = ifelse(is.na(gname2)," ", str_c(", ", gname2)),
+         gname3 = ifelse(is.na(gname3)," ", str_c(", ", gname3))) %>%
+  mutate(popmap = str_c("Country: ", country_txt, " <br/> ",
+                        "Date: ", idate, " <br/> ",
+                        "Attack type: ", attacktype1_txt, attacktype2_txt, attacktype3_txt, " <br/> ",
+                        "Weapon: ", weaptype1_txt, weaptype2_txt, weaptype3_txt, " <br/> ",
+                        "Target: ", targtype1_txt, targtype2_txt, targtype3_txt, " <br/> ",
+                        "Group responsible: ", gname, gname2, gname3, " <br/> ",
+                        "Casualty: ", str_replace_na(nkill), " <br/> ",
+                        "Injured: ", str_replace_na(nwound), " <br/> ",
+                        "Property damage: ", str_replace_na(propextent_txt))) %>% pull(popmap)
+```
+
+# Interactive plot
+
+[Available here](https://vietle.shinyapps.io/terrorism-Rshiny/)
 
